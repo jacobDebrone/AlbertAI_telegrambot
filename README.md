@@ -89,8 +89,6 @@ Deploying to platforms like Railway, Vercel, or Heroku? Follow their guides for 
 Got ideas or improvements? I would  love to see them! Submit issues or pull requests, and don’t forget to test and document your changes.
 Dont forget to give a star 😌
 
-## 📜 License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for all the details.
 
 ---
