@@ -19,7 +19,7 @@ Follow these steps to set up your bot and get it running in no time:
 
 1. **Clone the Repository:**
    ```bash
-   git clone https://github.com/your-repo/telegram-bot-gen-ai.git
+   https://github.com/jacobDebrone/AlbertAI_telegrambot.git
    cd telegram-bot-gen-ai
    ```
 
