@@ -1,0 +1,7 @@
+fastapi
+pydantic
+telebot
+google-generativeai
+uvicorn
+psycopg2-binary
+asyncpg
