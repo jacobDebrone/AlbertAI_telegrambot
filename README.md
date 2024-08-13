@@ -1,7 +1,5 @@
 
 
----
-
 #  Albert AI 
 
 Dive into the future with our powerful Telegram bot that brings together cutting-edge Gemini AI and FastAPI. This project is designed to deliver engaging and intelligent conversations, manage user sessions, and keep everything running smoothly with PostgreSQL.
@@ -87,10 +85,12 @@ Deploying to platforms like Railway, Vercel, or Heroku? Follow their guides for 
 - **API Key Woes**: Double-check your `GEMINI_API_KEY` for correctness and permissions.
 - **Bot Token Troubles**: Ensure your `TELEGRAM_BOT_TOKEN` is valid and correctly set.
 - **Database Connection**: Verify your PostgreSQL connection details and ensure the server is reachable.
+- **Webhook connecction** Make sure to include your webhook url in the code
 
 ## 🤝 Contributing
 
-Got ideas or improvements? We’d love to see them! Submit issues or pull requests, and don’t forget to test and document your changes.
+Got ideas or improvements? I would  love to see them! Submit issues or pull requests, and don’t forget to test and document your changes.
+Dont forget to give a star 😌
 
 ## 📜 License
 
