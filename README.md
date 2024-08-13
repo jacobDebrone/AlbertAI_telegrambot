@@ -41,11 +41,8 @@ Follow these steps to set up your bot and get it running in no time:
    - `TELEGRAM_BOT_TOKEN`: The magic token for your Telegram bot.
    - PostgreSQL connection details in `DB_CONFIG`.
 
-   Create a `.env` file like this:
-   ```env
-   GEMINI_API_KEY=your_gemini_api_key
-   TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-   ```
+
+
 
 
    ```
