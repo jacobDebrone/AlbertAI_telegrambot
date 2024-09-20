@@ -131,31 +131,6 @@ The bot is configured to log errors and warnings to a file named `bot_errors.log
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 ```
 
-## Contributing
-
-Contributions are welcome! Please follow these steps to contribute:
-
-1. **Fork the Repository**
-
-2. **Create a New Branch**
-
-   ```bash
-   git checkout -b feature/YourFeature
-   ```
-
-3. **Commit Your Changes**
-
-   ```bash
-   git commit -m "Add your feature"
-   ```
-
-4. **Push to the Branch**
-
-   ```bash
-   git push origin feature/YourFeature
-   ```
-
-5. **Open a Pull Request**
 
 ## License
 
