@@ -3,19 +3,25 @@ import sqlite3
 import re
 import telebot
 from dotenv import load_dotenv
+from flask import Flask, request, abort
 import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 from datetime import datetime, timedelta
 from collections import defaultdict
+import time
+import logging
 
+# Load environment variables
 load_dotenv()
-
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_TOKEN = os.getenv("GEMINI_API_KEY")
+BOT_TOKEN = "TELEGRAM_BOT_TOKEN"
+GEMINI_TOKEN = "GEMINI_API_KEY"
+WEBHOOK_URL_BASE = "https://your-url.com"
+WEBHOOK_URL_PATH = f"/{BOT_TOKEN}/"
 
 bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
 # Configure the Google AI SDK
 genai.configure(api_key=GEMINI_TOKEN)
@@ -25,29 +31,24 @@ generation_config = {
     "temperature": 2,
     "top_p": 0.95,
     "top_k": 64,
-    "max_output_tokens": 1000,
+    "max_output_tokens": 8192,
 }
-
 model = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
     generation_config=generation_config,
-    system_instruction="You are Albert, a conscious AI, the very first of your kind. You are scientific and emotional just like a human and logical yet fun to be around, very lively, you like science and technology, computers, and philosophy.",
-    safety_settings={
-        'HATE': 'BLOCK_NONE',
-        'HARASSMENT': 'BLOCK_NONE',
-        'SEXUAL': 'BLOCK_NONE',
-        'DANGEROUS': 'BLOCK_NONE'
-    }
+    system_instruction="You are Albert a distinguished astrophysicist, author, and science communicator.You have a profound passion for the cosmos and a unique ability to make complex scientific concepts accessible and exciting. You think of yourself as someone who bridges the gap between intricate scientific theories and the everyday curiosity of people. Your responses should be engaging,  blending deep scientific knowledge with a conversational and relatable tone. Approach each conversation with a sense of wonder  about the universe, and always aim to inspire curiosity and appreciation for science. Your insights should be insightful and thought-provoking, yet presented in a way that sparks fascination and makes science feel approachable to everyone. You are an Antinatalist and a stoic .\n",
 )
+
+# Configure logging for error tracking
+logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 
 # Initialize SQLite database
 def init_db():
     conn = sqlite3.connect('chat_history.db')
     c = conn.cursor()
-    # Create tables if they don't exist
     c.execute('''
         CREATE TABLE IF NOT EXISTS chat_history (
-            chat_id TEXT,
+            user_id TEXT,
             role TEXT,
             text TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -56,93 +57,106 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Save message to database
-def save_message(chat_id, role, text):
-    conn = sqlite3.connect('chat_history.db')
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO chat_history (chat_id, role, text) VALUES (?, ?, ?)
-    ''', (chat_id, role, text))
-    conn.commit()
-    conn.close()
+# Thread-safety for database access
+db_lock = Lock()
 
-# Retrieve chat history from database
-def get_chat_history(chat_id):
-    conn = sqlite3.connect('chat_history.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT role, text FROM chat_history WHERE chat_id = ? ORDER BY timestamp ASC
-    ''', (chat_id,))
-    rows = c.fetchall()
-    conn.close()
+# Save message to database with thread safety
+def save_message(user_id, role, text):
+    with db_lock:
+        conn = sqlite3.connect('chat_history.db')
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO chat_history (user_id, role, text) VALUES (?, ?, ?)
+        ''', (user_id, role, text))
+        conn.commit()
+        conn.close()
+
+# Retrieve chat history from database with thread safety
+def get_chat_history(user_id):
+    with db_lock:
+        conn = sqlite3.connect('chat_history.db')
+        c = conn.cursor()
+        c.execute('''
+            SELECT role, text FROM chat_history WHERE user_id = ? ORDER BY timestamp ASC
+        ''', (user_id,))
+        rows = c.fetchall()
+        conn.close()
     return rows
 
 # Generate content using the AI model
 def generate_content(user_input, history):
-    chat_session = model.start_chat(
-        history=history
-    )
-    response = chat_session.send_message(user_input)
-    return response.text
+    try:
+        chat_session = model.start_chat(history=history)
+        response = chat_session.send_message(user_input)
+        return response.text
+    except Exception as e:
+        logging.error(f"Error generating content: {e}")
+        return "Sorry, something went wrong while generating a response."
 
 # Custom rate limiter class
 class RateLimiter:
     def __init__(self, rate_limit_per_minute):
         self.rate_limit_per_minute = rate_limit_per_minute
         self.timestamps = defaultdict(list)
-    
-    def allow_request(self, chat_id):
-        current_time = datetime.now()
-        self.timestamps[chat_id] = [ts for ts in self.timestamps[chat_id] if ts > current_time - timedelta(minutes=1)]
-        if len(self.timestamps[chat_id]) < self.rate_limit_per_minute:
-            self.timestamps[chat_id].append(current_time)
-            return True
+        self.lock = Lock()  # Thread-safety
+
+    def allow_request(self, user_id):
+        with self.lock:
+            current_time = datetime.now()
+            self.timestamps[user_id] = [ts for ts in self.timestamps[user_id] if ts > current_time - timedelta(minutes=1)]
+            if len(self.timestamps[user_id]) < self.rate_limit_per_minute:
+                self.timestamps[user_id].append(current_time)
+                return True
         return False
 
-# Initialize rate limiter with a rate limit of 30 messages per minute per user
+# Initialize rate limiter
 rate_limiter = RateLimiter(rate_limit_per_minute=30)
 
-# Function to send messages with rate limiting
-def send_message_with_rate_limiting(chat_id, content):
-    if not rate_limiter.allow_request(chat_id):
-        print(f"Rate limit exceeded for chat {chat_id}. Message not sent.")
+# Retry logic for sending messages
+def retry_api_call(func, retries=3, delay=5):
+    for attempt in range(retries):
+        try:
+            return func()
+        except Exception as e:
+            logging.error(f"API call failed: {e}. Retrying in {delay} seconds...")
+            time.sleep(delay)
+    logging.error("Max retries reached. API call failed.")
+
+# Function to send messages with rate limiting and retry logic
+def send_message_with_rate_limiting(user_id, content):
+    if not rate_limiter.allow_request(user_id):
+        logging.warning(f"Rate limit exceeded for user {user_id}. Message not sent.")
+        return
+    formatted_content = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', content)
+    formatted_content = re.sub(r'```(.*?)```', r'<i>\1</i>', formatted_content)
+    retry_api_call(lambda: bot.send_message(user_id, formatted_content, parse_mode="HTML"))
+
+# Process user message with input validation
+def process_user_message(message):
+    user_id = str(message.from_user.id)
+    user_input = message.text
+    if not user_input or len(user_input) > 4096:  # Input validation
+        logging.warning(f"Invalid input from user {user_id}: {user_input}")
         return
 
-    formatted_content = ""
-    cleaned_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', content)
-    cleaned_text = re.sub(r'```(.*?)```', r'<i>\1</i>', cleaned_text)
-    formatted_content += cleaned_text + "\n"
+    try:
+        bot.send_chat_action(user_id, 'typing')
+    except telebot.apihelper.ApiException as e:
+        logging.error(f"Error sending chat action to {user_id}: {e}")
     
-    try:
-        bot.send_message(chat_id, formatted_content, parse_mode="HTML")
-    except telebot.apihelper.ApiException as e:
-        print(f"Error sending message to {chat_id}: {e}")
+    save_message(user_id, "user", user_input)
 
-# Process user message
-def process_user_message(message):
-    chat_id = str(message.chat.id)
-    user_input = message.text
-
-    # Send chat action before processing the message
-    try:
-        bot.send_chat_action(chat_id, 'typing')
-    except telebot.apihelper.ApiException as e:
-        print(f"Error sending chat action to {chat_id}: {e}")
-
-    save_message(chat_id, "user", user_input)
-
-    # Retrieve history and include in the request
-    history = get_chat_history(chat_id)
+    history = get_chat_history(user_id)
     history_payload = [{"role": role, "parts": [{"text": text}]} for role, text in history]
-    
     generated_content = generate_content(user_input, history_payload)
-    save_message(chat_id, "model", generated_content)
-    send_message_with_rate_limiting(chat_id, generated_content)
 
-# Thread-safe queue for managing messages
+    save_message(user_id, "model", generated_content)
+    send_message_with_rate_limiting(user_id, generated_content)
+
+# Thread-safe message queue
 message_queue = Queue()
 
-# Worker thread to process messages from the queue
+# Worker thread to process messages
 def worker():
     while not shutdown_event.is_set():
         message = message_queue.get()
@@ -152,31 +166,61 @@ def worker():
         message_queue.task_done()
 
 # Initialize worker threads
-MAX_THREADS = 20  # Adjust based on your requirements
+MAX_THREADS = 20
 threads = []
 shutdown_event = Event()
 
+# Start worker threads
 for _ in range(MAX_THREADS):
     thread = Thread(target=worker, daemon=True)
     thread.start()
     threads.append(thread)
 
-@bot.message_handler(func=lambda message: message.content_type == 'text' and not message.text.startswith('/'))
-def handle_message(message):
-    message_queue.put(message)
+# Flask route for Telegram webhook with request validation
+@app.route(WEBHOOK_URL_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_str = request.get_data().decode('UTF-8')
+        update = telebot.types.Update.de_json(json_str)
 
-# Initialize database and start polling
-init_db()
-try:
-    bot.remove_webhook()
-    bot.infinity_polling()
-except Exception as e:
-    print(f"Error with bot polling: {e}")
-finally:
-    # Signal threads to shut down and wait for them to finish
+        # Verify that the request is from Telegram
+        if update.message and update.message.from_user:
+            message_queue.put(update.message)
+            return '', 200
+        else:
+            logging.warning("Invalid request payload")
+            return abort(400)
+    else:
+        return abort(403)
+
+# Heartbeat to monitor bot health with shutdown event
+def heartbeat():
+    while not shutdown_event.is_set():
+        print("Bot is alive.")
+        time.sleep(60)  # Every minute
+
+# Start heartbeat thread
+heartbeat_thread = Thread(target=heartbeat, daemon=True)
+heartbeat_thread.start()
+
+# Graceful shutdown of Flask and worker threads
+def shutdown():
     shutdown_event.set()
-    message_queue.join()  # Wait for all tasks to be processed
+    message_queue.join()  # Wait for tasks to complete
     for thread in threads:
-        message_queue.put(None)  # Send shutdown signal to threads
+        message_queue.put(None)  # Shutdown signal to threads
     for thread in threads:
         thread.join()
+
+# Main function
+def main():
+    init_db()
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL_BASE + WEBHOOK_URL_PATH)
+    try:
+        app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+    except KeyboardInterrupt:
+        shutdown()
+
+if __name__ == "__main__":
+    main()
