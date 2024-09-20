@@ -1,7 +1,5 @@
-fastapi
-pydantic
-telebot
+flask
+python-dotenv
+pyTelegramBotAPI
 google-generativeai
-uvicorn
-psycopg2-binary
-asyncpg
+gunicorn
